@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="resolution_entries">
+        <item>640 x 480</item>
+        <item>1280 x 720 (권장)</item>
+        <item>1920 x 1080</item>
+    </string-array>
+    <string-array name="resolution_values">
+        <item>640x480</item>
+        <item>1280x720</item>
+        <item>1920x1080</item>
+    </string-array>
+
+    <string-array name="fps_entries">
+        <item>10 fps</item>
+        <item>15 fps (권장)</item>
+        <item>20 fps</item>
+        <item>30 fps</item>
+    </string-array>
+    <string-array name="fps_values">
+        <item>10</item>
+        <item>15</item>
+        <item>20</item>
+        <item>30</item>
+    </string-array>
+
+    <string-array name="bitrate_entries">
+        <item>500 kbps (저화질, 32GB 약 5일)</item>
+        <item>800 kbps (32GB 약 3일)</item>
+        <item>1000 kbps (권장, 32GB 약 2.5일)</item>
+        <item>1200 kbps (32GB 약 2일)</item>
+        <item>2000 kbps (고화질, 32GB 약 1.3일)</item>
+        <item>4000 kbps (최고화질, 32GB 약 16시간)</item>
+    </string-array>
+    <string-array name="bitrate_values">
+        <item>500</item>
+        <item>800</item>
+        <item>1000</item>
+        <item>1200</item>
+        <item>2000</item>
+        <item>4000</item>
+    </string-array>
+
+    <string-array name="segment_entries">
+        <item>1분</item>
+        <item>3분</item>
+        <item>5분 (권장)</item>
+        <item>10분</item>
+        <item>30분</item>
+    </string-array>
+    <string-array name="segment_values">
+        <item>1</item>
+        <item>3</item>
+        <item>5</item>
+        <item>10</item>
+        <item>30</item>
+    </string-array>
+</resources>

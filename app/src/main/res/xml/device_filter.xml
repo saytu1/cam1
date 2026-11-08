@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- UVC 비디오 클래스 -->
+    <usb-device class="14" />
+    <!-- 복합 장치(IAD) 형태의 대부분의 웹캠 -->
+    <usb-device class="239" subclass="2" />
+</resources>

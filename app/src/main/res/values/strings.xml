@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USB 홈캠 블랙박스</string>
+    <string name="settings">설정</string>
+    <string name="recordings">녹화 목록</string>
+    <string name="start">녹화 시작</string>
+    <string name="stop">녹화 중지</string>
+    <string name="channel_name">녹화 상태</string>
+    <string name="no_preview">미리보기 (USB 카메라 대기 중)</string>
+</resources>

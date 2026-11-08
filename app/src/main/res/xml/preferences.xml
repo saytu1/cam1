@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="저장">
+        <ListPreference
+            android:key="storage_location"
+            android:title="저장 위치"
+            android:defaultValue="internal"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            android:key="max_storage_gb"
+            android:title="최대 사용 용량 (GB)"
+            android:defaultValue="0"
+            android:dialogMessage="0 = 자동 (남은 공간 전체 사용, 1GB 여유 유지)" />
+        <ListPreference
+            android:key="segment_minutes"
+            android:title="파일 분할 단위"
+            android:defaultValue="5"
+            android:entries="@array/segment_entries"
+            android:entryValues="@array/segment_values"
+            app:useSimpleSummaryProvider="true" />
+        <Preference
+            android:key="estimate"
+            android:title="예상 녹화 가능 시간"
+            android:selectable="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="영상 / 음성">
+        <ListPreference
+            android:key="resolution"
+            android:title="해상도"
+            android:defaultValue="1280x720"
+            android:entries="@array/resolution_entries"
+            android:entryValues="@array/resolution_values"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            android:key="fps"
+            android:title="프레임 레이트"
+            android:defaultValue="15"
+            android:entries="@array/fps_entries"
+            android:entryValues="@array/fps_values"
+            app:useSimpleSummaryProvider="true" />
+        <ListPreference
+            android:key="video_bitrate_kbps"
+            android:title="영상 비트레이트"
+            android:defaultValue="1000"
+            android:entries="@array/bitrate_entries"
+            android:entryValues="@array/bitrate_values"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:key="audio_enabled"
+            android:title="음성 녹음"
+            android:summary="마이크 오디오 함께 저장 (AAC 32kbps)"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="자동 실행">
+        <SwitchPreferenceCompat
+            android:key="auto_start_launch"
+            android:title="앱 실행 시 자동 녹화"
+            android:defaultValue="true" />
+        <SwitchPreferenceCompat
+            android:key="auto_start_boot"
+            android:title="부팅 시 자동 녹화"
+            android:defaultValue="true" />
+        <Preference
+            android:key="battery_opt"
+            android:title="배터리 최적화 제외"
+            android:summary="장시간 백그라운드 녹화를 위해 권장" />
+    </PreferenceCategory>
+</PreferenceScreen>
