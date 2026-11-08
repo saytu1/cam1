@@ -14,6 +14,7 @@ public final class Prefs {
     public static final String KEY_FPS = "fps";
     public static final String KEY_BITRATE = "video_bitrate_kbps";
     public static final String KEY_AUDIO = "audio_enabled";
+    public static final String KEY_TIMESTAMP = "timestamp_enabled";
     public static final String KEY_AUTO_LAUNCH = "auto_start_launch";
     public static final String KEY_AUTO_BOOT = "auto_start_boot";
     /** 사용자가 마지막으로 녹화를 켜두었는지 (부팅 시 복원용) */
@@ -53,6 +54,8 @@ public final class Prefs {
     public int videoBitrate() { return parseInt(sp.getString(KEY_BITRATE, "1000"), 1000) * 1000; }
 
     public boolean audioEnabled() { return sp.getBoolean(KEY_AUDIO, true); }
+
+    public boolean timestampEnabled() { return sp.getBoolean(KEY_TIMESTAMP, true); }
 
     public boolean autoStartLaunch() { return sp.getBoolean(KEY_AUTO_LAUNCH, true); }
 

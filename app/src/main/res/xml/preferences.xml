@@ -49,6 +49,11 @@
             android:entryValues="@array/bitrate_values"
             app:useSimpleSummaryProvider="true" />
         <SwitchPreferenceCompat
+            android:key="timestamp_enabled"
+            android:title="날짜/시간 표시"
+            android:summary="녹화 영상 좌측 상단에 날짜와 시간(초 단위)을 새겨 넣음"
+            android:defaultValue="true" />
+        <SwitchPreferenceCompat
             android:key="audio_enabled"
             android:title="음성 녹음"
             android:summary="마이크 오디오 함께 저장 (AAC 32kbps)"

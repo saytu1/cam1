@@ -36,6 +36,9 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
     private SurfaceView preview;
     private TextView status;
     private TextView recBadge;
+    private TextView clock;
+    private final java.text.SimpleDateFormat clockFmt =
+            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
     private Button toggle;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -81,6 +84,7 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
         preview = findViewById(R.id.preview);
         status = findViewById(R.id.status);
         recBadge = findViewById(R.id.rec_badge);
+        clock = findViewById(R.id.clock);
         toggle = findViewById(R.id.btn_toggle);
 
         toggle.setOnClickListener(v -> {
@@ -227,6 +231,9 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
         boolean rec = service != null && service.isRecording();
         toggle.setText(running ? R.string.stop : R.string.start);
         recBadge.setVisibility(rec ? View.VISIBLE : View.GONE);
+        // 미리보기용 현재 시각 (녹화 파일에는 좌측 상단에 새겨짐)
+        clock.setVisibility(prefs.timestampEnabled() ? View.VISIBLE : View.GONE);
+        clock.setText(clockFmt.format(new java.util.Date()));
 
         StringBuilder sb = new StringBuilder();
         sb.append(service != null ? service.getStatusText() : "녹화 꺼짐");
@@ -250,7 +257,8 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
                 .append("  ·  ").append(prefs.width()).append("x").append(prefs.height())
                 .append(" ").append(prefs.fps()).append("fps ")
                 .append(prefs.videoBitrate() / 1000).append("kbps")
-                .append(prefs.audioEnabled() ? " +음성" : "");
+                .append(prefs.audioEnabled() ? " +음성" : "")
+                .append(prefs.timestampEnabled() ? " +시간표시" : "");
         status.setText(sb.toString());
     }
 }

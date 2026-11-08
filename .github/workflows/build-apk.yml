@@ -3,8 +3,10 @@ name: Build APK
 on:
   push:
     branches: ['**']
-  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -27,11 +29,24 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/app-release.apk out/UsbHomeCamBlackBox-${GITHUB_SHA::7}.apk
+          cp app/build/outputs/apk/release/app-release.apk out/UsbHomeCamBlackBox.apk
           ls -la out
 
-      - name: Upload APK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: UsbHomeCamBlackBox-apk
           path: out/*.apk
+
+      # 로그인 없이 휴대폰에서 바로 받을 수 있도록 Releases 에 APK 직접 첨부
+      # 고정 주소: https://github.com/<owner>/<repo>/releases/latest/download/UsbHomeCamBlackBox.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" out/UsbHomeCamBlackBox.apk \
+            --target "${{ github.sha }}" \
+            --title "USB 홈캠 블랙박스 $TAG" \
+            --notes "브랜치: ${{ github.ref_name }} / 커밋: ${GITHUB_SHA::7}" \
+            --latest
