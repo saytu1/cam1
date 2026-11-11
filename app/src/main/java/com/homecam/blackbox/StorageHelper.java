@@ -4,6 +4,8 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
+import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
@@ -195,72 +197,99 @@ public final class StorageHelper {
 
     public static synchronized void invalidateCache() {
         cachedPath = null;
+        cachedStore = null;
     }
 
-    /** 실제로 녹화할 폴더. 원하는 폴더에 쓸 수 없으면 앱 전용 폴더 */
-    public static File recordDir(Context ctx) {
-        File want = desiredFolder(ctx);
-        if (isWritable(want)) return want;
-        File app = appFolder(ctx);
-        if (!app.exists() && !app.mkdirs()) Log.w(TAG, "mkdirs failed: " + app);
-        return app;
+    // ------------------------------------------------------------ 저장소 선택
+
+    /** 사용자가 원하는 저장소 (시스템 선택기로 고른 USB 폴더 또는 일반 폴더) */
+    public static RecStore desiredStore(Context ctx) {
+        Prefs p = new Prefs(ctx);
+        String tree = p.treeUri();
+        if (!tree.isEmpty()) {
+            try {
+                return new RecStore.SafStore(ctx, Uri.parse(tree));
+            } catch (Exception e) {
+                Log.w(TAG, "bad tree uri", e);
+            }
+        }
+        return new RecStore.FileStore(desiredFolder(ctx));
     }
 
-    /** 원하는 폴더 대신 앱 전용 폴더로 대체 중인지 */
+    private static RecStore cachedStore;
+    private static long cachedStoreAt;
+
+    /** 실제로 녹화할 저장소. 원하는 곳을 쓸 수 없으면(장치 분리·권한 없음) 앱 전용 폴더 (10초 캐시) */
+    public static synchronized RecStore currentStore(Context ctx) {
+        long now = System.currentTimeMillis();
+        if (cachedStore != null && now - cachedStoreAt < 10_000) return cachedStore;
+        RecStore want = desiredStore(ctx);
+        boolean ok;
+        if (want instanceof RecStore.SafStore) {
+            ok = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ((RecStore.SafStore) want).isAccessible();
+        } else {
+            ok = isWritable(((RecStore.FileStore) want).dir);
+        }
+        RecStore store = ok ? want : new RecStore.FileStore(appFolder(ctx));
+        if (!ok) {
+            File app = appFolder(ctx);
+            if (!app.exists() && !app.mkdirs()) Log.w(TAG, "mkdirs failed: " + app);
+        }
+        cachedStore = store;
+        cachedStoreAt = now;
+        return store;
+    }
+
+    public static synchronized void invalidateStore() {
+        cachedStore = null;
+        cachedPath = null;
+    }
+
+    /** 원하는 저장소 대신 앱 전용 폴더로 대체 중인지 */
     public static boolean isFallback(Context ctx) {
-        return !isWritable(desiredFolder(ctx));
+        return !currentStore(ctx).id().equals(desiredStore(ctx).id());
     }
 
     // ------------------------------------------------------------ 파일 목록
 
-    /** 폴더의 녹화 파일 목록 (오래된 순) */
-    public static List<File> listRecordings(File dir) {
-        File[] files = dir.listFiles((d, name) -> name.startsWith(PREFIX) && name.endsWith(".mp4"));
-        List<File> list = new ArrayList<>();
-        if (files != null) Collections.addAll(list, files);
-        Collections.sort(list, (a, b) -> a.getName().compareTo(b.getName()));
-        return list;
-    }
-
-    /** 현재 폴더 + 이전에 쓰던 앱 전용 폴더(내장/SD)의 모든 녹화 파일, 최신 순 */
-    public static List<File> listAllRecordingsNewestFirst(Context ctx) {
-        List<File> dirs = new ArrayList<>();
-        dirs.add(recordDir(ctx));
-        dirs.add(desiredFolder(ctx));
-        dirs.add(appFolder(ctx));
-        for (File d : ctx.getExternalFilesDirs(null)) if (d != null) dirs.add(new File(d, DIR_NAME));
-        Set<String> seenDirs = new HashSet<>();
-        List<File> all = new ArrayList<>();
-        for (File d : dirs) {
-            String key;
-            try { key = d.getCanonicalPath(); } catch (Exception e) { key = d.getAbsolutePath(); }
-            if (!seenDirs.add(key)) continue;
-            all.addAll(listRecordings(d));
+    /** 현재 저장소 + 원하는 저장소 + 이전에 쓰던 앱 전용 폴더의 모든 녹화 파일, 최신 순 */
+    public static List<RecStore.Rec> listAllNewestFirst(Context ctx) {
+        List<RecStore> stores = new ArrayList<>();
+        stores.add(currentStore(ctx));
+        RecStore want = desiredStore(ctx);
+        if (!(want instanceof RecStore.SafStore) || ((RecStore.SafStore) want).isAccessible()) stores.add(want);
+        stores.add(new RecStore.FileStore(appFolder(ctx)));
+        for (File d : ctx.getExternalFilesDirs(null)) if (d != null) stores.add(new RecStore.FileStore(new File(d, DIR_NAME)));
+        Set<String> seenStores = new HashSet<>();
+        Set<String> seenKeys = new HashSet<>();
+        List<RecStore.Rec> all = new ArrayList<>();
+        for (RecStore st : stores) {
+            String id = st.id();
+            if (st instanceof RecStore.FileStore) {
+                try { id = "file:" + ((RecStore.FileStore) st).dir.getCanonicalPath(); } catch (Exception ignored) { }
+            }
+            if (!seenStores.add(id)) continue;
+            for (RecStore.Rec r : st.list()) if (seenKeys.add(r.key())) all.add(r);
         }
-        Collections.sort(all, (a, b) -> b.getName().compareTo(a.getName()));
+        Collections.sort(all, (a, b) -> b.name.compareTo(a.name));
         return all;
     }
 
-    public static long totalSize(List<File> files) {
+    public static long totalSize(List<RecStore.Rec> recs) {
         long s = 0;
-        for (File f : files) s += f.length();
+        for (RecStore.Rec r : recs) s += r.size;
         return s;
     }
 
-    public static File newSegmentFile(File dir) {
-        String name = PREFIX + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".mp4";
-        return new File(dir, name);
+    public static String newSegmentName() {
+        return PREFIX + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".mp4";
     }
 
     // ------------------------------------------------------------ 용량
 
-    private static long reserveFor(File dir) {
-        try {
-            StatFs fs = new StatFs(dir.getAbsolutePath());
-            return Math.min(MIN_RESERVE, fs.getTotalBytes() / 20); // 1GB 또는 전체의 5% 중 작은 값
-        } catch (Exception e) {
-            return MIN_RESERVE;
-        }
+    private static long reserveFor(RecStore store) {
+        long total = store.totalBytes();
+        return total > 0 ? Math.min(MIN_RESERVE, total / 20) : MIN_RESERVE; // 1GB 또는 전체의 5% 중 작은 값
     }
 
     public static long usableBytes(File dir) {
@@ -271,22 +300,21 @@ public final class StorageHelper {
         }
     }
 
-    /** 잠기지 않은 녹화분 크기 */
-    private static long unlockedSize(LockStore locks, List<File> files) {
-        long s = 0;
-        for (File f : files) if (!locks.isLocked(f)) s += f.length();
-        return s;
-    }
-
     /** 루프 녹화에 쓸 수 있는 용량 (잠기지 않은 녹화분 + 여유 공간 - 예약분, 최대 용량 설정 반영) */
     public static long capacityBytes(Context ctx) {
-        File dir = recordDir(ctx);
-        List<File> files = listRecordings(dir);
+        RecStore store = currentStore(ctx);
+        List<RecStore.Rec> recs = store.list();
+        return capacityBytes(ctx, store, recs);
+    }
+
+    public static long capacityBytes(Context ctx, RecStore store, List<RecStore.Rec> recs) {
         LockStore locks = new LockStore(ctx);
-        long unlocked = unlockedSize(locks, files);
-        long cap = unlocked + usableBytes(dir) - reserveFor(dir);
+        long unlocked = 0;
+        for (RecStore.Rec r : recs) if (!locks.isLocked(r)) unlocked += r.size;
+        long usable = store.usableBytes();
+        long cap = usable >= 0 ? unlocked + usable - reserveFor(store) : Long.MAX_VALUE / 4;
         long max = new Prefs(ctx).maxStorageBytes();
-        if (max > 0) cap = Math.min(cap, Math.max(0, max - (totalSize(files) - unlocked)));
+        if (max > 0) cap = Math.min(cap, Math.max(0, max - (totalSize(recs) - unlocked)));
         return Math.max(0, cap);
     }
 
@@ -294,35 +322,45 @@ public final class StorageHelper {
      * 다음 세그먼트를 쓸 공간을 확보한다. 잠기지 않은 가장 오래된 파일부터 삭제.
      * @return 공간 확보 성공 여부
      */
-    public static boolean ensureSpace(Context ctx, File dir, long nextSegmentBytes, @Nullable File keep) {
+    public static boolean ensureSpace(Context ctx, RecStore store, long nextSegmentBytes) {
         Prefs p = new Prefs(ctx);
         LockStore locks = new LockStore(ctx);
         long max = p.maxStorageBytes();
-        long reserve = reserveFor(dir);
-        List<File> files = listRecordings(dir);
-        long used = totalSize(files);
-        for (File oldest : files) {
+        long reserve = reserveFor(store);
+        List<RecStore.Rec> recs = store.list();
+        long used = totalSize(recs);
+        for (RecStore.Rec oldest : recs) {
+            long usable = store.usableBytes();
             boolean overQuota = max > 0 && used + nextSegmentBytes > max;
-            boolean lowFree = usableBytes(dir) < reserve + nextSegmentBytes;
+            boolean lowFree = usable >= 0 && usable < reserve + nextSegmentBytes;
             if (!overQuota && !lowFree) break;
-            if (oldest.equals(keep) || locks.isLocked(oldest)) continue;
-            long len = oldest.length();
+            if (locks.isLocked(oldest)) continue;
             if (deleteRecording(ctx, oldest)) {
-                used -= len;
-                Log.i(TAG, "deleted old recording: " + oldest.getName());
+                used -= oldest.size;
+                Log.i(TAG, "deleted old recording: " + oldest.name);
             }
         }
-        return usableBytes(dir) >= nextSegmentBytes;
+        long usable = store.usableBytes();
+        return usable < 0 || usable >= nextSegmentBytes;
     }
 
     // ------------------------------------------------------------ 삭제 / 미디어 스캔
 
-    public static boolean deleteRecording(Context ctx, File f) {
-        boolean ok = f.delete();
-        if (ok) {
-            new LockStore(ctx).forget(f);
-            scan(ctx, f);
+    public static boolean deleteRecording(Context ctx, RecStore.Rec r) {
+        boolean ok;
+        if (r.file != null) {
+            ok = r.file.delete();
+            if (ok) scan(ctx, r.file);
+        } else if (r.uri != null) {
+            try {
+                ok = DocumentsContract.deleteDocument(ctx.getContentResolver(), r.uri);
+            } catch (Exception e) {
+                ok = false;
+            }
+        } else {
+            ok = false;
         }
+        if (ok) new LockStore(ctx).forget(r.key());
         return ok;
     }
 

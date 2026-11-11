@@ -8,6 +8,7 @@ import androidx.preference.PreferenceManager;
 /** 설정값 접근 헬퍼 */
 public final class Prefs {
     public static final String KEY_FOLDER = "record_folder";
+    public static final String KEY_TREE_URI = "record_tree_uri";
     public static final String KEY_SCHEDULE_ENABLED = "schedule_enabled";
     public static final String KEY_SCHEDULES = "schedules";
     public static final String KEY_MAX_GB = "max_storage_gb";
@@ -36,7 +37,13 @@ public final class Prefs {
     /** 사용자가 선택한 저장 폴더 절대 경로 ("" = 기본 폴더) */
     public String folder() { return sp.getString(KEY_FOLDER, ""); }
 
-    public void setFolder(String path) { sp.edit().putString(KEY_FOLDER, path).apply(); }
+    /** 일반 폴더 선택 (시스템 선택기 폴더 설정은 해제) */
+    public void setFolder(String path) { sp.edit().putString(KEY_FOLDER, path).putString(KEY_TREE_URI, "").apply(); }
+
+    /** 시스템 폴더 선택기(SAF)로 고른 폴더 URI ("" = 사용 안 함) */
+    public String treeUri() { return sp.getString(KEY_TREE_URI, ""); }
+
+    public void setTreeUri(String uri) { sp.edit().putString(KEY_TREE_URI, uri).apply(); }
 
     public boolean scheduleEnabled() { return sp.getBoolean(KEY_SCHEDULE_ENABLED, false); }
 

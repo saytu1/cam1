@@ -86,10 +86,10 @@ public class SettingsActivity extends AppCompatActivity {
         private void updateSummaries() {
             Preference folder = findPreference("record_folder_pick");
             if (folder != null) {
-                File want = StorageHelper.desiredFolder(requireContext());
-                String sum = StorageHelper.volumeLabel(requireContext(), want) + "\n" + want.getAbsolutePath();
+                RecStore want = StorageHelper.desiredStore(requireContext());
+                String sum = want.label(requireContext()) + "\n" + want.displayPath();
                 if (StorageHelper.isFallback(requireContext())) {
-                    sum += "\n⚠ 이 폴더에 쓸 수 없어 앱 전용 폴더에 저장 중 (권한 확인 필요)";
+                    sum += "\n⚠ 지금은 이 위치를 쓸 수 없어 앱 전용 폴더에 저장 중 (장치 연결/권한 확인)";
                 }
                 folder.setSummary(sum);
             }

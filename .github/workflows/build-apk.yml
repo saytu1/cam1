@@ -29,11 +29,13 @@ jobs:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
-            echo "::error::GitHub Secrets 에 SIGNING_KEYSTORE_BASE64 가 없습니다. 저장소 Settings > Secrets and variables > Actions 에 서명 키 4개를 등록하세요."
-            exit 1
+            echo "::warning::GitHub Secrets 에 서명 키가 없습니다. 컴파일 확인만 하고 Releases 배포는 하지 않습니다."
+            echo "HAS_SIGNING=false" >> "$GITHUB_ENV"
+          else
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            echo "SIGNING_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+            echo "HAS_SIGNING=true" >> "$GITHUB_ENV"
           fi
-          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
-          echo "SIGNING_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
 
       - name: Build APK
         env:
@@ -62,6 +64,7 @@ jobs:
       # 로그인 없이 휴대폰에서 바로 받을 수 있도록 Releases 에 APK 직접 첨부
       # 고정 주소: https://github.com/<owner>/<repo>/releases/latest/download/UsbHomeCamBlackBox.apk
       - name: Publish release
+        if: env.HAS_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -71,3 +74,10 @@ jobs:
             --title "USB 홈캠 블랙박스 $TAG" \
             --notes "브랜치: ${{ github.ref_name }} / 커밋: ${GITHUB_SHA::7}" \
             --latest
+
+      # 서명 키가 없으면 배포하지 않았음을 실패로 표시 (컴파일은 위에서 확인됨)
+      - name: Require signing key for release
+        if: env.HAS_SIGNING != 'true'
+        run: |
+          echo "::error::빌드는 성공했지만 서명 키 Secrets(SIGNING_*) 4개가 없어 Releases 배포를 건너뛰었습니다."
+          exit 1

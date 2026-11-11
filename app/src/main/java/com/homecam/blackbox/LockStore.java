@@ -3,7 +3,6 @@ package com.homecam.blackbox;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-import java.io.File;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -31,9 +30,8 @@ public final class LockStore {
     }
 
     /** BB_20261108_153000.mp4 → 20261108 (형식이 다르면 null) */
-    public static String dateOf(File f) {
-        String n = f.getName();
-        if (n.startsWith(StorageHelper.PREFIX) && n.length() >= StorageHelper.PREFIX.length() + 8) {
+    public static String dateOf(String n) {
+        if (n != null && n.startsWith(StorageHelper.PREFIX) && n.length() >= StorageHelper.PREFIX.length() + 8) {
             String d = n.substring(StorageHelper.PREFIX.length(), StorageHelper.PREFIX.length() + 8);
             for (int i = 0; i < 8; i++) if (!Character.isDigit(d.charAt(i))) return null;
             return d;
@@ -41,18 +39,18 @@ public final class LockStore {
         return null;
     }
 
-    public boolean isFileLocked(File f) { return get(KEY_FILES).contains(f.getAbsolutePath()); }
+    public boolean isFileLocked(RecStore.Rec r) { return get(KEY_FILES).contains(r.key()); }
 
     public boolean isDateLocked(String date) { return date != null && get(KEY_DATES).contains(date); }
 
     /** 파일 잠금 또는 날짜 잠금 중 하나라도 걸려 있으면 true */
-    public boolean isLocked(File f) {
-        return isFileLocked(f) || isDateLocked(dateOf(f));
+    public boolean isLocked(RecStore.Rec r) {
+        return isFileLocked(r) || isDateLocked(dateOf(r.name));
     }
 
-    public void setFileLocked(File f, boolean locked) {
+    public void setFileLocked(RecStore.Rec r, boolean locked) {
         Set<String> s = get(KEY_FILES);
-        if (locked) s.add(f.getAbsolutePath()); else s.remove(f.getAbsolutePath());
+        if (locked) s.add(r.key()); else s.remove(r.key());
         put(KEY_FILES, s);
     }
 
@@ -65,8 +63,8 @@ public final class LockStore {
     public Set<String> lockedDates() { return get(KEY_DATES); }
 
     /** 삭제된 파일의 잠금 기록 정리 */
-    public void forget(File f) {
+    public void forget(String key) {
         Set<String> s = get(KEY_FILES);
-        if (s.remove(f.getAbsolutePath())) put(KEY_FILES, s);
+        if (s.remove(key)) put(KEY_FILES, s);
     }
 }

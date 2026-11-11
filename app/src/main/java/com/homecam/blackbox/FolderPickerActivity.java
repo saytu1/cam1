@@ -40,6 +40,12 @@ public class FolderPickerActivity extends AppCompatActivity {
     private TextView pathView, permBanner;
     private Button permButton;
     private LinearLayout volRow;
+    private TextView safInfo;
+
+    /** 시스템 폴더 선택기 결과: 영구 권한 저장 후 쓰기 테스트 */
+    private final androidx.activity.result.ActivityResultLauncher<Uri> pickTree =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+                    this::onTreePicked);
     private final List<String> names = new ArrayList<>();
     private ArrayAdapter<String> adapter;
 
@@ -79,6 +85,26 @@ public class FolderPickerActivity extends AppCompatActivity {
         permButton.setText("모든 파일 액세스 허용");
         permButton.setOnClickListener(v -> requestAllFilesAccess(this));
         root.addView(permButton);
+
+        // OTG USB 메모리·카드리더: 시스템 폴더 선택기로 권한 받기
+        safInfo = new TextView(this);
+        safInfo.setPadding(pad, pad / 2, pad, 0);
+        root.addView(safInfo);
+        Button saf = new Button(this);
+        saf.setText("🔌 USB/외장 장치 폴더 선택 (시스템 선택기)");
+        saf.setAllCaps(false);
+        saf.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                toast("Android 8.0 이상에서만 지원합니다");
+                return;
+            }
+            try {
+                pickTree.launch(null);
+            } catch (Exception e) {
+                toast("시스템 폴더 선택기를 열 수 없습니다");
+            }
+        });
+        root.addView(saf);
 
         // 저장소 선택 (내장 / SD)
         HorizontalScrollView hs = new HorizontalScrollView(this);
@@ -149,6 +175,7 @@ public class FolderPickerActivity extends AppCompatActivity {
         permButton.setVisibility(has ? View.GONE : View.VISIBLE);
         StorageHelper.invalidateCache();
         buildVolumeButtons();
+        updateSafInfo();
         if (current != null) open(current);
     }
 
@@ -170,6 +197,52 @@ public class FolderPickerActivity extends AppCompatActivity {
         manual.setAllCaps(false);
         manual.setOnClickListener(x -> enterPath());
         volRow.addView(manual);
+    }
+
+    private void onTreePicked(@androidx.annotation.Nullable Uri uri) {
+        if (uri == null) return;
+        try {
+            getContentResolver().takePersistableUriPermission(uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception e) {
+            toast("이 폴더의 권한을 받을 수 없습니다");
+            return;
+        }
+        RecStore.SafStore st = new RecStore.SafStore(this, uri);
+        if (!st.testWrite()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("쓸 수 없는 폴더")
+                    .setMessage("선택한 폴더에 파일을 만들 수 없습니다. 다른 폴더를 선택하세요.\n"
+                            + "(장치 최상위가 막혀 있으면 선택기에서 새 폴더를 만든 뒤 그 폴더를 선택)")
+                    .setPositiveButton("확인", null)
+                    .show();
+            return;
+        }
+        // 이전에 받은 다른 폴더 권한 정리
+        for (android.content.UriPermission up : getContentResolver().getPersistedUriPermissions()) {
+            if (!up.getUri().equals(uri)) {
+                try {
+                    getContentResolver().releasePersistableUriPermission(up.getUri(),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                } catch (Exception ignored) { }
+            }
+        }
+        prefs.setTreeUri(uri.toString());
+        StorageHelper.invalidateStore();
+        toast("저장 위치 변경: " + st.label(this) + " " + st.displayPath() + "\n(다음 파일부터 적용)");
+        finish();
+    }
+
+    private void updateSafInfo() {
+        RecStore want = StorageHelper.desiredStore(this);
+        if (want.isSaf()) {
+            boolean ok = ((RecStore.SafStore) want).isAccessible();
+            safInfo.setText("현재 저장 위치: " + want.label(this) + " " + want.displayPath()
+                    + (ok ? "" : "\n⚠ 지금 접근할 수 없음 (장치가 분리되었거나 권한이 사라짐)"));
+        } else {
+            safInfo.setText("현재 저장 위치: " + want.displayPath()
+                    + "\nOTG로 연결한 USB 메모리·카드리더는 아래 'USB/외장 장치 폴더 선택'을 사용하세요.");
+        }
     }
 
     private void enterPath() {

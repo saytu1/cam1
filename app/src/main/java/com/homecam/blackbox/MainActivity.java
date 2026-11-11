@@ -47,6 +47,8 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
     private SurfaceHolder holder;
     private Prefs prefs;
     private boolean autoStartChecked;
+    private String storageInfo;
+    private long storageInfoAt;
 
     private final ServiceConnection conn = new ServiceConnection() {
         @Override
@@ -163,6 +165,7 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
     @Override
     protected void onResume() {
         super.onResume();
+        storageInfo = null; // 설정 화면에서 돌아오면 저장소 정보 즉시 갱신
         if (service != null && service.isRunning()) {
             // 앱이 전면일 때 마이크 사용 타입을 다시 붙임 (부팅 직후 시작된 경우 대비)
             startService(new Intent(this, RecorderService.class).setAction(RecorderService.ACTION_REFRESH));
@@ -257,25 +260,36 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
             long sec = (System.currentTimeMillis() - service.getSegmentStartedAt()) / 1000;
             sb.append(String.format(Locale.US, "  [%02d:%02d]", sec / 60, sec % 60));
         }
-        File dir = StorageHelper.recordDir(this);
-        List<File> files = StorageHelper.listRecordings(dir);
-        long used = StorageHelper.totalSize(files);
-        long cap = StorageHelper.capacityBytes(this);
-        double hours = cap / prefs.bytesPerSecond() / 3600.0;
         String sched = service != null ? service.getScheduleText() : null;
         if (sched == null && prefs.scheduleEnabled()) sched = "예약 녹화 켜짐 (녹화 시작 버튼을 눌러 활성화)";
         if (sched != null) sb.append("\n⏰ ").append(sched);
-        sb.append("\n저장: ").append(StorageHelper.volumeLabel(this, dir)).append(" ").append(dir.getAbsolutePath());
-        if (StorageHelper.isFallback(this)) sb.append("\n⚠ 선택한 폴더에 쓸 수 없어 앱 전용 폴더 사용 중 (설정 > 저장 폴더 확인)");
-        sb.append("\n사용: ").append(StorageHelper.formatBytes(used))
-                .append(" / 녹화 가능 용량 ").append(StorageHelper.formatBytes(cap))
-                .append(" (").append(files.size()).append("개 파일)")
+        // 저장소 정보는 10초마다 갱신 (USB/SAF 폴더 조회 부담 줄이기)
+        long now = System.currentTimeMillis();
+        if (storageInfo == null || now - storageInfoAt > 10_000) {
+            storageInfoAt = now;
+            RecStore store = StorageHelper.currentStore(this);
+            List<RecStore.Rec> recs = store.list();
+            long used = StorageHelper.totalSize(recs);
+            long cap = StorageHelper.capacityBytes(this, store, recs);
+            double hours = cap / prefs.bytesPerSecond() / 3600.0;
+            StringBuilder si = new StringBuilder();
+            si.append("\n저장: ").append(store.label(this)).append(" ").append(store.displayPath());
+            if (StorageHelper.isFallback(this)) {
+                si.append("\n⚠ 선택한 저장 위치(").append(StorageHelper.desiredStore(this).displayPath())
+                        .append(")를 쓸 수 없어 앱 전용 폴더 사용 중. 장치 연결/권한 확인");
+            }
+            si.append("\n사용: ").append(StorageHelper.formatBytes(used))
+                    .append(" / 녹화 가능 용량 ").append(StorageHelper.formatBytes(cap))
+                    .append(" (").append(recs.size()).append("개 파일)")
                 .append("\n최대 보관: ").append(StorageHelper.formatHours(hours))
                 .append("  ·  ").append(prefs.width()).append("x").append(prefs.height())
                 .append(" ").append(prefs.fps()).append("fps ")
                 .append(prefs.videoBitrate() / 1000).append("kbps")
                 .append(prefs.audioEnabled() ? " +음성" : "")
-                .append(prefs.timestampEnabled() ? " +시간표시" : "");
+                    .append(prefs.timestampEnabled() ? " +시간표시" : "");
+            storageInfo = si.toString();
+        }
+        sb.append(storageInfo);
         status.setText(sb.toString());
     }
 }

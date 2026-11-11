@@ -82,13 +82,12 @@ public class RecorderService extends Service {
     @Nullable private Surface recorderSurface;
     private long lastFrames = -1;
     private final ExecutorService recExecutor = Executors.newSingleThreadExecutor();
-    @Nullable private File currentFile;
+    @Nullable private RecStore.Output currentOut;
     private long segmentStartedAt;
     private long lastWatchSize = -1;
     private int stallCount;
     private int consecutiveErrors;
     private String statusText = "대기 중";
-    private File recordDir;
 
     // ---------------------------------------------------------------- 외부 API
 
@@ -128,7 +127,7 @@ public class RecorderService extends Service {
 
     public String getStatusText() { return statusText; }
 
-    @Nullable public File getCurrentFile() { return currentFile; }
+    @Nullable public String getCurrentName() { return currentOut != null ? currentOut.name : null; }
 
     public long getSegmentStartedAt() { return segmentStartedAt; }
 
@@ -267,9 +266,9 @@ public class RecorderService extends Service {
         stopping = false;
         consecutiveErrors = 0;
         if (!wakeLock.isHeld()) wakeLock.acquire();
-        recordDir = StorageHelper.recordDir(this);
+        StorageHelper.invalidateStore();
         if (StorageHelper.isFallback(this)) {
-            Log.w(TAG, "desired folder not writable, using app folder: " + recordDir);
+            Log.w(TAG, "desired storage not available, using app folder");
         }
         if (camera == null) {
             camera = new CameraHelper();
@@ -312,7 +311,7 @@ public class RecorderService extends Service {
         recording = false;
         startPending = false;
         previewAttached = false;
-        currentFile = null;
+        currentOut = null;
     }
 
     // ---------------------------------------------------------------- 카메라 상태
@@ -548,35 +547,48 @@ public class RecorderService extends Service {
         final SegmentRecorder rec = new SegmentRecorder(cfg, new SegmentRecorder.Callback() {
             @Nullable
             @Override
-            public File nextFile() {
-                // 인코더 스레드에서 호출됨: 공간 확보 후 새 파일 경로 반환
-                File dir = StorageHelper.recordDir(RecorderService.this);
+            public RecStore.Output nextOutput() {
+                // 인코더 스레드에서 호출됨: 공간 확보 후 새 파일 생성
+                RecStore store = StorageHelper.currentStore(RecorderService.this);
                 long segBytes = (long) (prefs.bytesPerSecond() * prefs.segmentMinutes() * 60 * 1.2);
-                if (!StorageHelper.ensureSpace(RecorderService.this, dir, segBytes, null)) {
+                if (!StorageHelper.ensureSpace(RecorderService.this, store, segBytes)) {
                     handler.post(() -> setStatus("저장 공간 부족 - 공간 확보 대기"));
                     return null;
                 }
-                recordDir = dir;
-                return StorageHelper.newSegmentFile(dir);
+                RecStore.Output o = store.create(RecorderService.this, StorageHelper.newSegmentName());
+                if (o == null) {
+                    StorageHelper.invalidateStore(); // 장치 분리 등 → 다음 시도에서 다시 판정
+                    handler.post(() -> setStatus("파일 생성 실패 - 저장 위치 확인 중"));
+                }
+                return o;
             }
 
             @Override
-            public void onSegmentStarted(File file) {
+            public void onSegmentStarted(RecStore.Output out) {
                 handler.post(() -> {
-                    currentFile = file;
+                    currentOut = out;
                     recording = true;
                     consecutiveErrors = 0;
                     segmentStartedAt = System.currentTimeMillis();
                     lastWatchSize = -1;
                     stallCount = 0;
-                    setStatus("녹화 중: " + file.getName());
+                    setStatus("녹화 중: " + out.name);
                 });
             }
 
             @Override
-            public void onSegmentFinished(File file) {
-                Log.i(TAG, "saved " + file.getName() + " " + file.length());
-                StorageHelper.scan(RecorderService.this, file);
+            public void onSegmentFinished(RecStore.Output out, boolean ok) {
+                Log.i(TAG, "saved " + out.name + " ok=" + ok);
+                if (ok) {
+                    StorageHelper.currentStore(RecorderService.this).onFinished(RecorderService.this, out);
+                } else if (out.path != null) {
+                    //noinspection ResultOfMethodCallIgnored
+                    new File(out.path).delete();
+                } else if (out.uri != null) {
+                    try {
+                        android.provider.DocumentsContract.deleteDocument(getContentResolver(), out.uri);
+                    } catch (Exception ignored) { }
+                }
                 handler.post(RecorderService.this::notifyListener);
             }
 
@@ -643,8 +655,8 @@ public class RecorderService extends Service {
             if (recorder != null) {
                 // 카메라 프레임이 들어오지 않거나 파일이 커지지 않으면 멈춤으로 판단
                 long frames = recorder.getFramesRendered();
-                long size = currentFile != null ? currentFile.length() : -1;
-                boolean stalled = frames == lastFrames || (recording && size == lastWatchSize);
+                long size = currentOut != null ? currentOut.size() : -1;
+                boolean stalled = frames == lastFrames || (recording && size >= 0 && size == lastWatchSize);
                 lastFrames = frames;
                 lastWatchSize = size;
                 if (stalled) {

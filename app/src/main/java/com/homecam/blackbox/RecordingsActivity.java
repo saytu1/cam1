@@ -20,7 +20,6 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,13 +35,14 @@ public class RecordingsActivity extends AppCompatActivity {
     private static final long RECENT_MS = 15_000; // 녹화 중인 파일 보호
 
     private LockStore locks;
-    private final List<File> all = new ArrayList<>();
-    private final List<Object> rows = new ArrayList<>(); // String(날짜) 또는 File
-    private final Map<String, List<File>> byDate = new LinkedHashMap<>();
+    private final List<RecStore.Rec> all = new ArrayList<>();
+    private final List<Object> rows = new ArrayList<>(); // String(날짜) 또는 Rec
+    private final Map<String, List<RecStore.Rec>> byDate = new LinkedHashMap<>();
     private boolean lockedOnly;
     private Button tabAll, tabLocked;
     private TextView summary, empty;
     private RowAdapter adapter;
+    private String currentDisplay;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
@@ -89,12 +89,12 @@ public class RecordingsActivity extends AppCompatActivity {
         list.setAdapter(adapter);
         list.setOnItemClickListener((p, v, pos, id) -> {
             Object r = rows.get(pos);
-            if (r instanceof File) play((File) r);
+            if (r instanceof RecStore.Rec) play((RecStore.Rec) r);
             else dateMenu((String) r);
         });
         list.setOnItemLongClickListener((p, v, pos, id) -> {
             Object r = rows.get(pos);
-            if (r instanceof File) fileMenu((File) r);
+            if (r instanceof RecStore.Rec) fileMenu((RecStore.Rec) r);
             else dateMenu((String) r);
             return true;
         });
@@ -108,7 +108,7 @@ public class RecordingsActivity extends AppCompatActivity {
 
     private void reload() {
         all.clear();
-        all.addAll(StorageHelper.listAllRecordingsNewestFirst(this));
+        all.addAll(StorageHelper.listAllNewestFirst(this));
         rebuild();
     }
 
@@ -116,18 +116,18 @@ public class RecordingsActivity extends AppCompatActivity {
         byDate.clear();
         int lockedCount = 0;
         long lockedSize = 0;
-        for (File f : all) {
+        for (RecStore.Rec f : all) {
             boolean lk = locks.isLocked(f);
-            if (lk) { lockedCount++; lockedSize += f.length(); }
+            if (lk) { lockedCount++; lockedSize += f.size; }
             if (lockedOnly && !lk) continue;
-            String d = LockStore.dateOf(f);
+            String d = LockStore.dateOf(f.name);
             if (d == null) d = "기타";
-            List<File> l = byDate.get(d);
+            List<RecStore.Rec> l = byDate.get(d);
             if (l == null) byDate.put(d, l = new ArrayList<>());
             l.add(f);
         }
         rows.clear();
-        for (Map.Entry<String, List<File>> e : byDate.entrySet()) {
+        for (Map.Entry<String, List<RecStore.Rec>> e : byDate.entrySet()) {
             rows.add(e.getKey());
             rows.addAll(e.getValue());
         }
@@ -135,7 +135,9 @@ public class RecordingsActivity extends AppCompatActivity {
         tabLocked.setText("🔒 잠금 " + lockedCount);
         tabAll.setTypeface(null, lockedOnly ? Typeface.NORMAL : Typeface.BOLD);
         tabLocked.setTypeface(null, lockedOnly ? Typeface.BOLD : Typeface.NORMAL);
-        summary.setText("저장 폴더: " + StorageHelper.recordDir(this).getAbsolutePath()
+        RecStore cur = StorageHelper.currentStore(this);
+        currentDisplay = cur.isSaf() ? null : cur.displayPath();
+        summary.setText("저장 위치: " + cur.label(this) + " " + cur.displayPath()
                 + "\n전체 " + StorageHelper.formatBytes(StorageHelper.totalSize(all))
                 + " · 잠금 " + StorageHelper.formatBytes(lockedSize)
                 + "  (잠긴 파일은 전체 삭제·자동 삭제되지 않음)");
@@ -146,9 +148,9 @@ public class RecordingsActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------ 메뉴
 
-    private void fileMenu(File f) {
+    private void fileMenu(RecStore.Rec f) {
         boolean fileLocked = locks.isFileLocked(f);
-        String date = LockStore.dateOf(f);
+        String date = LockStore.dateOf(f.name);
         boolean dateLocked = locks.isDateLocked(date);
         List<String> labels = new ArrayList<>();
         List<Runnable> acts = new ArrayList<>();
@@ -169,7 +171,7 @@ public class RecordingsActivity extends AppCompatActivity {
                 return;
             }
             new AlertDialog.Builder(this)
-                    .setMessage(f.getName() + " 파일을 삭제할까요?")
+                    .setMessage(f.name + " 파일을 삭제할까요?")
                     .setPositiveButton("삭제", (d, w) -> {
                         if (StorageHelper.deleteRecording(this, f)) reload();
                         else toast("삭제하지 못했습니다");
@@ -178,7 +180,7 @@ public class RecordingsActivity extends AppCompatActivity {
                     .show();
         });
         new AlertDialog.Builder(this)
-                .setTitle(prettyName(f.getName()))
+                .setTitle(prettyName(f.name))
                 .setItems(labels.toArray(new String[0]), (d, which) -> acts.get(which).run())
                 .show();
     }
@@ -197,8 +199,8 @@ public class RecordingsActivity extends AppCompatActivity {
                         locks.setDateLocked(date, !locked);
                         rebuild();
                     } else {
-                        List<File> target = new ArrayList<>();
-                        for (File f : all) if (date.equals(LockStore.dateOf(f))) target.add(f);
+                        List<RecStore.Rec> target = new ArrayList<>();
+                        for (RecStore.Rec f : all) if (date.equals(LockStore.dateOf(f.name))) target.add(f);
                         confirmDelete(target, prettyDate(date) + " 파일");
                     }
                 })
@@ -210,13 +212,13 @@ public class RecordingsActivity extends AppCompatActivity {
     }
 
     /** 잠긴 파일과 녹화 중인 파일을 제외하고 삭제 */
-    private void confirmDelete(List<File> target, String what) {
-        List<File> del = new ArrayList<>();
+    private void confirmDelete(List<RecStore.Rec> target, String what) {
+        List<RecStore.Rec> del = new ArrayList<>();
         int skipped = 0;
         long now = System.currentTimeMillis();
-        for (File f : target) {
+        for (RecStore.Rec f : target) {
             if (locks.isLocked(f)) skipped++;
-            else if (now - f.lastModified() < RECENT_MS) skipped++; // 지금 녹화 중인 파일
+            else if (now - f.lastModified < RECENT_MS || isRecordingNow(f)) skipped++; // 지금 녹화 중인 파일
             else del.add(f);
         }
         if (del.isEmpty()) {
@@ -234,14 +236,14 @@ public class RecordingsActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void deleteInBackground(List<File> del) {
+    private void deleteInBackground(List<RecStore.Rec> del) {
         AlertDialog progress = new AlertDialog.Builder(this)
                 .setMessage("삭제 중…")
                 .setCancelable(false)
                 .show();
         new Thread(() -> {
             int ok = 0;
-            for (File f : del) if (StorageHelper.deleteRecording(this, f)) ok++;
+            for (RecStore.Rec f : del) if (StorageHelper.deleteRecording(this, f)) ok++;
             final int n = ok;
             ui.post(() -> {
                 progress.dismiss();
@@ -274,9 +276,23 @@ public class RecordingsActivity extends AppCompatActivity {
         return p.length() > 11 ? p.substring(11) : p;
     }
 
-    private void play(File f) {
+    /** 가장 최근 파일이 방금까지 쓰이고 있으면 녹화 중으로 간주 (SAF 는 수정 시각이 늦게 갱신될 수 있음) */
+    private boolean isRecordingNow(RecStore.Rec f) {
+        if (all.isEmpty() || all.get(0) != f) return false;
+        String n = f.name;
         try {
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", f);
+            java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US);
+            long start = fmt.parse(n.substring(StorageHelper.PREFIX.length(), n.length() - 4)).getTime();
+            long segMs = new Prefs(this).segmentMinutes() * 60_000L;
+            return System.currentTimeMillis() - start < segMs + 60_000;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void play(RecStore.Rec f) {
+        try {
+            Uri uri = f.uri != null ? f.uri : FileProvider.getUriForFile(this, getPackageName() + ".files", f.file);
             Intent i = new Intent(Intent.ACTION_VIEW)
                     .setDataAndType(uri, "video/mp4")
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -299,7 +315,7 @@ public class RecordingsActivity extends AppCompatActivity {
         @Override public Object getItem(int i) { return rows.get(i); }
         @Override public long getItemId(int i) { return i; }
         @Override public int getViewTypeCount() { return 2; }
-        @Override public int getItemViewType(int i) { return rows.get(i) instanceof File ? 1 : 0; }
+        @Override public int getItemViewType(int i) { return rows.get(i) instanceof RecStore.Rec ? 1 : 0; }
 
         @Override
         public View getView(int pos, View convertView, ViewGroup parent) {
@@ -307,7 +323,7 @@ public class RecordingsActivity extends AppCompatActivity {
             if (r instanceof String) {
                 TextView tv = convertView instanceof TextView ? (TextView) convertView : new TextView(RecordingsActivity.this);
                 String d = (String) r;
-                List<File> l = byDate.get(d);
+                List<RecStore.Rec> l = byDate.get(d);
                 tv.setPadding(dp(14), dp(10), dp(14), dp(6));
                 tv.setBackgroundColor(0xFF263238);
                 tv.setTextColor(Color.WHITE);
@@ -318,20 +334,19 @@ public class RecordingsActivity extends AppCompatActivity {
                         + (locks.isDateLocked(d) ? "  (날짜 잠금)" : ""));
                 return tv;
             }
-            File f = (File) r;
+            RecStore.Rec f = (RecStore.Rec) r;
             View v = convertView != null && !(convertView instanceof TextView) ? convertView
                     : getLayoutInflater().inflate(android.R.layout.simple_list_item_2, parent, false);
             TextView t1 = v.findViewById(android.R.id.text1);
             TextView t2 = v.findViewById(android.R.id.text2);
             boolean fl = locks.isFileLocked(f);
-            boolean dl = locks.isDateLocked(LockStore.dateOf(f));
-            t1.setText((fl || dl ? "🔒 " : "🎬 ") + timeOf(f.getName()));
-            String info = StorageHelper.formatBytes(f.length());
+            boolean dl = locks.isDateLocked(LockStore.dateOf(f.name));
+            t1.setText((fl || dl ? "🔒 " : "🎬 ") + timeOf(f.name));
+            String info = StorageHelper.formatBytes(f.size);
             if (fl) info += " · 파일 잠금";
             else if (dl) info += " · 날짜 잠금";
-            File parentDir = f.getParentFile();
-            if (parentDir != null && !parentDir.equals(StorageHelper.recordDir(RecordingsActivity.this))) {
-                info += " · " + parentDir.getAbsolutePath();
+            if (f.file != null && currentDisplay != null && !currentDisplay.equals(f.file.getParent())) {
+                info += " · " + f.file.getParent();
             }
             t2.setText(info);
             return v;

@@ -14,7 +14,9 @@ import android.view.Surface;
 
 import androidx.annotation.Nullable;
 
-import java.io.File;
+import com.homecam.blackbox.RecStore;
+
+import android.os.Build;
 import java.nio.ByteBuffer;
 
 /**
@@ -37,10 +39,11 @@ public final class SegmentRecorder {
     }
 
     public interface Callback {
-        /** 새 세그먼트 파일. null 이면 이번 키프레임은 건너뛰고 다음에 다시 요청 */
-        @Nullable File nextFile();
-        void onSegmentStarted(File file);
-        void onSegmentFinished(File file);
+        /** 새 세그먼트 출력. null 이면 이번 키프레임은 건너뛰고 다음에 다시 요청 */
+        @Nullable RecStore.Output nextOutput();
+        void onSegmentStarted(RecStore.Output out);
+        /** ok=false 이면 정상 마무리되지 못한 파일 (호출 측에서 정리) */
+        void onSegmentFinished(RecStore.Output out, boolean ok);
         void onError(String message, @Nullable Throwable t);
     }
 
@@ -58,7 +61,7 @@ public final class SegmentRecorder {
 
     // muxer 상태 (lock = this)
     private MediaMuxer muxer;
-    private File muxFile;
+    private RecStore.Output muxOut;
     private int videoTrack = -1, audioTrack = -1;
     private MediaFormat videoFormat, audioFormat;
     private long baseUs = -1;
@@ -331,25 +334,34 @@ public final class SegmentRecorder {
     // ------------------------------------------------------------ muxer
 
     private void openMuxer(long ptsUs) {
-        File f = null;
+        RecStore.Output o = null;
         try {
-            f = cb.nextFile();
-            if (f == null) return;
-            MediaMuxer m = new MediaMuxer(f.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            o = cb.nextOutput();
+            if (o == null) return;
+            MediaMuxer m;
+            if (o.path != null) {
+                m = new MediaMuxer(o.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            } else if (o.fd() != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                m = new MediaMuxer(o.fd(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            } else {
+                throw new IllegalStateException("no output target");
+            }
             videoTrack = m.addTrack(videoFormat);
             audioTrack = (audioEnabled && audioFormat != null) ? m.addTrack(audioFormat) : -1;
             m.start();
             muxer = m;
-            muxFile = f;
+            muxOut = o;
             baseUs = ptsUs;
             lastVideoUs = -1;
             lastAudioUs = -1;
-            cb.onSegmentStarted(f);
+            cb.onSegmentStarted(o);
         } catch (Exception e) {
             Log.e(TAG, "openMuxer", e);
             muxer = null;
-            if (f != null && f.length() == 0) //noinspection ResultOfMethodCallIgnored
-                f.delete();
+            if (o != null) {
+                o.close();
+                cb.onSegmentFinished(o, false);
+            }
             cb.onError("파일 생성 실패", e);
         }
     }
@@ -357,9 +369,9 @@ public final class SegmentRecorder {
     private void closeMuxer() {
         if (muxer == null) return;
         MediaMuxer m = muxer;
-        File f = muxFile;
+        RecStore.Output o = muxOut;
         muxer = null;
-        muxFile = null;
+        muxOut = null;
         boolean ok = true;
         try {
             m.stop();
@@ -368,10 +380,10 @@ public final class SegmentRecorder {
             Log.w(TAG, "muxer stop", e);
         }
         try { m.release(); } catch (Exception ignored) { }
-        if (f != null) {
-            if (!ok && f.length() < 1024) //noinspection ResultOfMethodCallIgnored
-                f.delete();
-            else cb.onSegmentFinished(f);
+        if (o != null) {
+            long size = o.size();
+            o.close();
+            cb.onSegmentFinished(o, ok || size >= 1024);
         }
     }
 
