@@ -39,6 +39,7 @@ public class FolderPickerActivity extends AppCompatActivity {
     private File volumeRoot;
     private TextView pathView, permBanner;
     private Button permButton;
+    private LinearLayout volRow;
     private final List<String> names = new ArrayList<>();
     private ArrayAdapter<String> adapter;
 
@@ -81,19 +82,9 @@ public class FolderPickerActivity extends AppCompatActivity {
 
         // 저장소 선택 (내장 / SD)
         HorizontalScrollView hs = new HorizontalScrollView(this);
-        LinearLayout volRow = new LinearLayout(this);
+        volRow = new LinearLayout(this);
         volRow.setOrientation(LinearLayout.HORIZONTAL);
         volRow.setPadding(pad / 2, pad / 2, pad / 2, 0);
-        for (StorageHelper.Volume v : StorageHelper.volumes(this)) {
-            Button b = new Button(this);
-            b.setText(v.label + " (여유 " + StorageHelper.formatBytes(StorageHelper.usableBytes(v.root)) + ")");
-            b.setAllCaps(false);
-            b.setOnClickListener(x -> {
-                volumeRoot = v.root;
-                open(v.root);
-            });
-            volRow.addView(b);
-        }
         hs.addView(volRow);
         root.addView(hs);
 
@@ -157,7 +148,49 @@ public class FolderPickerActivity extends AppCompatActivity {
         permBanner.setVisibility(has ? View.GONE : View.VISIBLE);
         permButton.setVisibility(has ? View.GONE : View.VISIBLE);
         StorageHelper.invalidateCache();
+        buildVolumeButtons();
         if (current != null) open(current);
+    }
+
+    /** 저장장치 버튼 (USB/OTG 장치를 꽂고 돌아오면 다시 갱신) */
+    private void buildVolumeButtons() {
+        volRow.removeAllViews();
+        for (StorageHelper.Volume v : StorageHelper.volumes(this)) {
+            Button b = new Button(this);
+            b.setText(v.label + " (여유 " + StorageHelper.formatBytes(StorageHelper.usableBytes(v.root)) + ")");
+            b.setAllCaps(false);
+            b.setOnClickListener(x -> {
+                volumeRoot = v.root;
+                open(v.root);
+            });
+            volRow.addView(b);
+        }
+        Button manual = new Button(this);
+        manual.setText("경로 직접 입력");
+        manual.setAllCaps(false);
+        manual.setOnClickListener(x -> enterPath());
+        volRow.addView(manual);
+    }
+
+    private void enterPath() {
+        EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        et.setText(current != null ? current.getAbsolutePath() : "/storage/");
+        new AlertDialog.Builder(this)
+                .setTitle("폴더 경로 입력")
+                .setMessage("예: /storage/1234-ABCD/BlackBox\n(OTG 장치는 보통 /storage/ 아래에 있습니다)")
+                .setView(et)
+                .setPositiveButton("열기", (d, w) -> {
+                    File f = new File(et.getText().toString().trim());
+                    if (!f.isDirectory() && !f.mkdirs()) {
+                        toast("폴더를 열거나 만들 수 없습니다");
+                        return;
+                    }
+                    volumeRoot = rootOf(f);
+                    open(f);
+                })
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     @Override

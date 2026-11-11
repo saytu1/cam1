@@ -84,7 +84,58 @@ public final class StorageHelper {
         if (out.isEmpty()) {
             out.add(new Volume("내장 저장소", Environment.getExternalStorageDirectory(), false));
         }
+        addStorageManagerVolumes(ctx, out);
+        addMountedStorageDirs(out);
         return out;
+    }
+
+    private static boolean containsRoot(List<Volume> out, File root) {
+        String p = root.getAbsolutePath();
+        for (Volume v : out) if (v.root.getAbsolutePath().equals(p)) return true;
+        return false;
+    }
+
+    /** OTG 로 연결한 USB 메모리·카드리더 등 시스템이 알려주는 모든 저장장치 */
+    private static void addStorageManagerVolumes(Context ctx, List<Volume> out) {
+        try {
+            android.os.storage.StorageManager sm =
+                    (android.os.storage.StorageManager) ctx.getSystemService(Context.STORAGE_SERVICE);
+            if (sm == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+            for (android.os.storage.StorageVolume sv : sm.getStorageVolumes()) {
+                if (!Environment.MEDIA_MOUNTED.equals(sv.getState())) continue;
+                File dir = null;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    dir = sv.getDirectory();
+                } else {
+                    try {
+                        dir = (File) sv.getClass().getMethod("getPathFile").invoke(sv);
+                    } catch (Exception e) {
+                        try {
+                            dir = new File((String) sv.getClass().getMethod("getPath").invoke(sv));
+                        } catch (Exception ignored) { }
+                    }
+                }
+                if (dir == null || !dir.isDirectory() || containsRoot(out, dir)) continue;
+                String desc = sv.getDescription(ctx);
+                String label = (desc != null && !desc.isEmpty()) ? desc : "외부 저장장치";
+                if (!label.toUpperCase(Locale.ROOT).contains("USB") && sv.isRemovable()) label = "USB/외부 " + label;
+                out.add(new Volume(label, dir, sv.isRemovable()));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "storage volumes", e);
+        }
+    }
+
+    /** 일부 기기에서 위 목록에 빠지는 장치 대비: /storage 아래 마운트된 폴더 직접 확인 */
+    private static void addMountedStorageDirs(List<Volume> out) {
+        File[] dirs = new File("/storage").listFiles();
+        if (dirs == null) return;
+        for (File d : dirs) {
+            String n = d.getName();
+            if (n.equals("emulated") || n.equals("self") || n.startsWith(".")) continue;
+            if (!d.isDirectory() || !d.canRead() || containsRoot(out, d)) continue;
+            out.add(new Volume("외부 저장장치 (" + n + ")", d, true));
+        }
     }
 
     /** 경로가 속한 저장소 이름 */
