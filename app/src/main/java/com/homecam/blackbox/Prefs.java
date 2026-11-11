@@ -7,7 +7,9 @@ import androidx.preference.PreferenceManager;
 
 /** 설정값 접근 헬퍼 */
 public final class Prefs {
-    public static final String KEY_STORAGE = "storage_location";
+    public static final String KEY_FOLDER = "record_folder";
+    public static final String KEY_SCHEDULE_ENABLED = "schedule_enabled";
+    public static final String KEY_SCHEDULES = "schedules";
     public static final String KEY_MAX_GB = "max_storage_gb";
     public static final String KEY_SEGMENT = "segment_minutes";
     public static final String KEY_RESOLUTION = "resolution";
@@ -31,7 +33,25 @@ public final class Prefs {
 
     public SharedPreferences raw() { return sp; }
 
-    public String storageLocation() { return sp.getString(KEY_STORAGE, "internal"); }
+    /** 사용자가 선택한 저장 폴더 절대 경로 ("" = 기본 폴더) */
+    public String folder() { return sp.getString(KEY_FOLDER, ""); }
+
+    public void setFolder(String path) { sp.edit().putString(KEY_FOLDER, path).apply(); }
+
+    public boolean scheduleEnabled() { return sp.getBoolean(KEY_SCHEDULE_ENABLED, false); }
+
+    public void setScheduleEnabled(boolean v) { sp.edit().putBoolean(KEY_SCHEDULE_ENABLED, v).apply(); }
+
+    public java.util.List<Schedule> schedules() { return Schedule.parse(sp.getString(KEY_SCHEDULES, "")); }
+
+    public void setSchedules(java.util.List<Schedule> list) {
+        sp.edit().putString(KEY_SCHEDULES, Schedule.toJson(list)).apply();
+    }
+
+    /** 예약 기능을 고려해 지금 녹화해야 하는지 */
+    public boolean shouldRecordNow() {
+        return !scheduleEnabled() || Schedule.isActive(schedules(), System.currentTimeMillis());
+    }
 
     public long maxStorageBytes() {
         double gb = parseDouble(sp.getString(KEY_MAX_GB, "0"), 0);

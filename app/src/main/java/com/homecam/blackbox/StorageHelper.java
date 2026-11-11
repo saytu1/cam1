@@ -1,22 +1,30 @@
 package com.homecam.blackbox;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.media.MediaScannerConnection;
+import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
 import android.util.Log;
 
+import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
+
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
- * 저장 위치(내장 / SD카드) 결정과 루프 녹화용 오래된 파일 자동 삭제.
- * 권한 없이 쓸 수 있는 앱 전용 폴더(Android/data/패키지명/files/BlackBox)를 사용한다.
+ * 저장 폴더 결정, 녹화 파일 목록, 루프 녹화용 오래된 파일 자동 삭제.
+ * 사용자가 고른 폴더(모든 파일 액세스 권한 필요)를 쓰고, 쓸 수 없으면 앱 전용 폴더로 대체한다.
  */
 public final class StorageHelper {
     private static final String TAG = "StorageHelper";
@@ -26,59 +34,158 @@ public final class StorageHelper {
 
     private StorageHelper() {}
 
-    /** 내장 저장소의 앱 전용 폴더 */
-    public static File internalRoot(Context ctx) {
-        File f = ctx.getExternalFilesDir(null);
-        return f != null ? f : ctx.getFilesDir();
+    // ------------------------------------------------------------ 권한
+
+    /** 공용 저장소(내장/SD) 아무 폴더에나 쓸 수 있는지 */
+    public static boolean hasAllFilesAccess(Context ctx) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        return ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
-    /** 장착된 SD카드의 앱 전용 폴더. 없으면 null */
-    public static File sdRoot(Context ctx) {
+    // ------------------------------------------------------------ 저장소 볼륨
+
+    public static final class Volume {
+        public final String label;
+        public final File root;
+        public final boolean removable;
+
+        Volume(String label, File root, boolean removable) {
+            this.label = label;
+            this.root = root;
+            this.removable = removable;
+        }
+    }
+
+    /** 내장 저장소 + 장착된 SD카드 루트 목록 */
+    public static List<Volume> volumes(Context ctx) {
+        List<Volume> out = new ArrayList<>();
         File[] dirs = ctx.getExternalFilesDirs(null);
-        for (int i = 1; i < dirs.length; i++) {
+        int sdCount = 0;
+        for (int i = 0; i < dirs.length; i++) {
             File d = dirs[i];
             if (d == null) continue;
+            String path = d.getAbsolutePath();
+            int idx = path.indexOf("/Android/");
+            if (idx <= 0) continue;
+            File root = new File(path.substring(0, idx));
+            boolean removable;
             try {
-                if (Environment.isExternalStorageRemovable(d)
-                        && Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState(d))) {
-                    return d;
-                }
+                removable = Environment.isExternalStorageRemovable(d);
+                if (!Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState(d))) continue;
             } catch (Exception e) {
-                Log.w(TAG, "sd check failed", e);
+                removable = i > 0;
             }
+            String label = removable ? (++sdCount > 1 ? "SD카드 " + sdCount : "SD카드") : "내장 저장소";
+            out.add(new Volume(label, root, removable));
         }
-        return null;
+        if (out.isEmpty()) {
+            out.add(new Volume("내장 저장소", Environment.getExternalStorageDirectory(), false));
+        }
+        return out;
     }
 
-    /** 설정에 따른 녹화 폴더. SD카드 선택 시 미장착이면 내장으로 대체 */
+    /** 경로가 속한 저장소 이름 */
+    public static String volumeLabel(Context ctx, File f) {
+        String p = f.getAbsolutePath();
+        Volume best = null;
+        for (Volume v : volumes(ctx)) {
+            String r = v.root.getAbsolutePath();
+            if (p.startsWith(r) && (best == null || r.length() > best.root.getAbsolutePath().length())) best = v;
+        }
+        return best != null ? best.label : "기기";
+    }
+
+    // ------------------------------------------------------------ 저장 폴더
+
+    /** 앱 전용 폴더 (권한 없이 항상 쓰기 가능, 앱 삭제 시 함께 삭제) */
+    public static File appFolder(Context ctx) {
+        File f = ctx.getExternalFilesDir(null);
+        return new File(f != null ? f : ctx.getFilesDir(), DIR_NAME);
+    }
+
+    /** 기본 저장 폴더: 내장 저장소/Movies/BlackBox */
+    public static File defaultFolder() {
+        return new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), DIR_NAME);
+    }
+
+    /** 사용자가 원하는 폴더 (설정값 또는 기본 폴더) */
+    public static File desiredFolder(Context ctx) {
+        String path = new Prefs(ctx).folder();
+        return path.isEmpty() ? defaultFolder() : new File(path);
+    }
+
+    private static String cachedPath;
+    private static boolean cachedOk;
+    private static long cachedAt;
+
+    /** 폴더를 만들고 실제로 파일을 쓸 수 있는지 확인 (10초 캐시) */
+    public static synchronized boolean isWritable(File dir) {
+        long now = System.currentTimeMillis();
+        String p = dir.getAbsolutePath();
+        if (p.equals(cachedPath) && now - cachedAt < 10_000) return cachedOk;
+        boolean ok = false;
+        try {
+            if (!dir.exists()) dir.mkdirs();
+            if (dir.isDirectory()) {
+                File t = new File(dir, ".bb_write_test");
+                ok = (t.exists() || t.createNewFile()) && t.delete();
+            }
+        } catch (Exception e) {
+            ok = false;
+        }
+        cachedPath = p;
+        cachedOk = ok;
+        cachedAt = now;
+        return ok;
+    }
+
+    public static synchronized void invalidateCache() {
+        cachedPath = null;
+    }
+
+    /** 실제로 녹화할 폴더. 원하는 폴더에 쓸 수 없으면 앱 전용 폴더 */
     public static File recordDir(Context ctx) {
-        Prefs p = new Prefs(ctx);
-        File root = null;
-        if ("sd".equals(p.storageLocation())) root = sdRoot(ctx);
-        if (root == null) root = internalRoot(ctx);
-        File dir = new File(root, DIR_NAME);
-        if (!dir.exists() && !dir.mkdirs()) Log.w(TAG, "mkdirs failed: " + dir);
-        return dir;
+        File want = desiredFolder(ctx);
+        if (isWritable(want)) return want;
+        File app = appFolder(ctx);
+        if (!app.exists() && !app.mkdirs()) Log.w(TAG, "mkdirs failed: " + app);
+        return app;
     }
 
-    public static boolean isUsingSd(Context ctx) {
-        return "sd".equals(new Prefs(ctx).storageLocation()) && sdRoot(ctx) != null;
+    /** 원하는 폴더 대신 앱 전용 폴더로 대체 중인지 */
+    public static boolean isFallback(Context ctx) {
+        return !isWritable(desiredFolder(ctx));
     }
 
-    /** 녹화 파일 목록 (오래된 순) */
+    // ------------------------------------------------------------ 파일 목록
+
+    /** 폴더의 녹화 파일 목록 (오래된 순) */
     public static List<File> listRecordings(File dir) {
         File[] files = dir.listFiles((d, name) -> name.startsWith(PREFIX) && name.endsWith(".mp4"));
-        if (files == null) return new ArrayList<>();
-        List<File> list = new ArrayList<>(Arrays.asList(files));
+        List<File> list = new ArrayList<>();
+        if (files != null) Collections.addAll(list, files);
         Collections.sort(list, (a, b) -> a.getName().compareTo(b.getName()));
         return list;
     }
 
-    /** 전체 녹화 폴더 목록 (내장 + SD) 의 파일, 최신 순 */
+    /** 현재 폴더 + 이전에 쓰던 앱 전용 폴더(내장/SD)의 모든 녹화 파일, 최신 순 */
     public static List<File> listAllRecordingsNewestFirst(Context ctx) {
-        List<File> all = new ArrayList<>(listRecordings(new File(internalRoot(ctx), DIR_NAME)));
-        File sd = sdRoot(ctx);
-        if (sd != null) all.addAll(listRecordings(new File(sd, DIR_NAME)));
+        List<File> dirs = new ArrayList<>();
+        dirs.add(recordDir(ctx));
+        dirs.add(desiredFolder(ctx));
+        dirs.add(appFolder(ctx));
+        for (File d : ctx.getExternalFilesDirs(null)) if (d != null) dirs.add(new File(d, DIR_NAME));
+        Set<String> seenDirs = new HashSet<>();
+        List<File> all = new ArrayList<>();
+        for (File d : dirs) {
+            String key;
+            try { key = d.getCanonicalPath(); } catch (Exception e) { key = d.getAbsolutePath(); }
+            if (!seenDirs.add(key)) continue;
+            all.addAll(listRecordings(d));
+        }
         Collections.sort(all, (a, b) -> b.getName().compareTo(a.getName()));
         return all;
     }
@@ -94,11 +201,12 @@ public final class StorageHelper {
         return new File(dir, name);
     }
 
+    // ------------------------------------------------------------ 용량
+
     private static long reserveFor(File dir) {
         try {
             StatFs fs = new StatFs(dir.getAbsolutePath());
-            long total = fs.getTotalBytes();
-            return Math.min(MIN_RESERVE, total / 20); // 1GB 또는 전체의 5% 중 작은 값
+            return Math.min(MIN_RESERVE, fs.getTotalBytes() / 20); // 1GB 또는 전체의 5% 중 작은 값
         } catch (Exception e) {
             return MIN_RESERVE;
         }
@@ -112,42 +220,70 @@ public final class StorageHelper {
         }
     }
 
-    /** 녹화에 쓸 수 있는 전체 용량 (기존 녹화분 + 여유 공간 - 예약분, 최대 용량 설정 반영) */
+    /** 잠기지 않은 녹화분 크기 */
+    private static long unlockedSize(LockStore locks, List<File> files) {
+        long s = 0;
+        for (File f : files) if (!locks.isLocked(f)) s += f.length();
+        return s;
+    }
+
+    /** 루프 녹화에 쓸 수 있는 용량 (잠기지 않은 녹화분 + 여유 공간 - 예약분, 최대 용량 설정 반영) */
     public static long capacityBytes(Context ctx) {
         File dir = recordDir(ctx);
-        long used = totalSize(listRecordings(dir));
-        long cap = used + usableBytes(dir) - reserveFor(dir);
+        List<File> files = listRecordings(dir);
+        LockStore locks = new LockStore(ctx);
+        long unlocked = unlockedSize(locks, files);
+        long cap = unlocked + usableBytes(dir) - reserveFor(dir);
         long max = new Prefs(ctx).maxStorageBytes();
-        if (max > 0) cap = Math.min(cap, max);
+        if (max > 0) cap = Math.min(cap, Math.max(0, max - (totalSize(files) - unlocked)));
         return Math.max(0, cap);
     }
 
     /**
-     * 다음 세그먼트를 쓸 공간을 확보한다. 가장 오래된 파일부터 삭제.
-     * @param keep 삭제하면 안 되는 파일(현재 녹화 중) - null 가능
+     * 다음 세그먼트를 쓸 공간을 확보한다. 잠기지 않은 가장 오래된 파일부터 삭제.
      * @return 공간 확보 성공 여부
      */
-    public static boolean ensureSpace(Context ctx, File dir, long nextSegmentBytes, File keep) {
+    public static boolean ensureSpace(Context ctx, File dir, long nextSegmentBytes, @Nullable File keep) {
         Prefs p = new Prefs(ctx);
+        LockStore locks = new LockStore(ctx);
         long max = p.maxStorageBytes();
         long reserve = reserveFor(dir);
         List<File> files = listRecordings(dir);
         long used = totalSize(files);
-        int idx = 0;
-        while (idx < files.size()) {
+        for (File oldest : files) {
             boolean overQuota = max > 0 && used + nextSegmentBytes > max;
             boolean lowFree = usableBytes(dir) < reserve + nextSegmentBytes;
             if (!overQuota && !lowFree) break;
-            File oldest = files.get(idx++);
-            if (oldest.equals(keep)) continue;
+            if (oldest.equals(keep) || locks.isLocked(oldest)) continue;
             long len = oldest.length();
-            if (oldest.delete()) {
+            if (deleteRecording(ctx, oldest)) {
                 used -= len;
                 Log.i(TAG, "deleted old recording: " + oldest.getName());
             }
         }
         return usableBytes(dir) >= nextSegmentBytes;
     }
+
+    // ------------------------------------------------------------ 삭제 / 미디어 스캔
+
+    public static boolean deleteRecording(Context ctx, File f) {
+        boolean ok = f.delete();
+        if (ok) {
+            new LockStore(ctx).forget(f);
+            scan(ctx, f);
+        }
+        return ok;
+    }
+
+    /** 갤러리/파일 앱에 바로 보이도록 미디어 스캔 (삭제된 파일은 목록에서 제거됨) */
+    public static void scan(Context ctx, File f) {
+        try {
+            MediaScannerConnection.scanFile(ctx.getApplicationContext(),
+                    new String[]{f.getAbsolutePath()}, new String[]{"video/mp4"}, null);
+        } catch (Exception ignored) { }
+    }
+
+    // ------------------------------------------------------------ 표시
 
     public static String formatBytes(long b) {
         if (b >= 1_000_000_000L) return String.format(Locale.US, "%.1fGB", b / 1e9);

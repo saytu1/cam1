@@ -3,11 +3,10 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <PreferenceCategory android:title="저장">
-        <ListPreference
-            android:key="storage_location"
-            android:title="저장 위치"
-            android:defaultValue="internal"
-            app:useSimpleSummaryProvider="true" />
+        <Preference
+            android:key="record_folder_pick"
+            android:title="저장 폴더"
+            android:summary="녹화 파일을 저장할 폴더 선택 / 새 폴더 만들기" />
         <EditTextPreference
             android:key="max_storage_gb"
             android:title="최대 사용 용량 (GB)"
@@ -58,6 +57,13 @@
             android:title="음성 녹음"
             android:summary="마이크 오디오 함께 저장 (AAC 32kbps)"
             android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="예약 녹화">
+        <Preference
+            android:key="schedule_open"
+            android:title="예약 녹화 설정"
+            android:summary="요일과 시간대를 지정해 자동으로 녹화 시작/종료" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="자동 실행">

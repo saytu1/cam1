@@ -119,6 +119,22 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
         container.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fitPreview(r - l, b - t));
 
         requestPermissionsIfNeeded();
+        maybeAskAllFilesAccess();
+    }
+
+    /** 원하는 폴더(기본: Movies/BlackBox)에 저장하려면 모든 파일 액세스 권한이 필요 → 최초 1회 안내 */
+    private void maybeAskAllFilesAccess() {
+        if (StorageHelper.hasAllFilesAccess(this)) return;
+        android.content.SharedPreferences sp = prefs.raw();
+        if (sp.getBoolean("asked_all_files", false)) return;
+        sp.edit().putBoolean("asked_all_files", true).apply();
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("저장 폴더 권한")
+                .setMessage("녹화 파일을 내장 저장소의 Movies/BlackBox 폴더(또는 직접 고른 폴더)에 저장하려면 "
+                        + "'모든 파일 액세스' 권한이 필요합니다.\n\n허용하지 않으면 앱 전용 폴더에 저장됩니다.")
+                .setPositiveButton("권한 설정", (d, w) -> FolderPickerActivity.requestAllFilesAccess(this))
+                .setNegativeButton("나중에", null)
+                .show();
     }
 
     /** 미리보기를 설정 해상도 비율(예: 16:9)에 맞춤 */
@@ -246,10 +262,11 @@ public class MainActivity extends AppCompatActivity implements RecorderService.L
         long used = StorageHelper.totalSize(files);
         long cap = StorageHelper.capacityBytes(this);
         double hours = cap / prefs.bytesPerSecond() / 3600.0;
-        sb.append("\n저장 위치: ").append(StorageHelper.isUsingSd(this) ? "SD카드" : "내장 저장소");
-        if ("sd".equals(prefs.storageLocation()) && !StorageHelper.isUsingSd(this)) {
-            sb.append(" (SD카드 없음 → 내장 사용)");
-        }
+        String sched = service != null ? service.getScheduleText() : null;
+        if (sched == null && prefs.scheduleEnabled()) sched = "예약 녹화 켜짐 (녹화 시작 버튼을 눌러 활성화)";
+        if (sched != null) sb.append("\n⏰ ").append(sched);
+        sb.append("\n저장: ").append(StorageHelper.volumeLabel(this, dir)).append(" ").append(dir.getAbsolutePath());
+        if (StorageHelper.isFallback(this)) sb.append("\n⚠ 선택한 폴더에 쓸 수 없어 앱 전용 폴더 사용 중 (설정 > 저장 폴더 확인)");
         sb.append("\n사용: ").append(StorageHelper.formatBytes(used))
                 .append(" / 녹화 가능 용량 ").append(StorageHelper.formatBytes(cap))
                 .append(" (").append(files.size()).append("개 파일)")

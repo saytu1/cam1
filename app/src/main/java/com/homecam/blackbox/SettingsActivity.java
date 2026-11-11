@@ -12,7 +12,6 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.EditTextPreference;
-import androidx.preference.ListPreference;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
@@ -35,17 +34,19 @@ public class SettingsActivity extends AppCompatActivity {
         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
             setPreferencesFromResource(R.xml.preferences, rootKey);
 
-            ListPreference storage = findPreference(Prefs.KEY_STORAGE);
-            if (storage != null) {
-                File sd = StorageHelper.sdRoot(requireContext());
-                File in = StorageHelper.internalRoot(requireContext());
-                String sdLabel = sd != null
-                        ? "SD카드 (여유 " + StorageHelper.formatBytes(StorageHelper.usableBytes(sd)) + ")"
-                        : "SD카드 (미장착)";
-                storage.setEntries(new CharSequence[]{
-                        "내장 저장소 (여유 " + StorageHelper.formatBytes(StorageHelper.usableBytes(in)) + ")",
-                        sdLabel});
-                storage.setEntryValues(new CharSequence[]{"internal", "sd"});
+            Preference folder = findPreference("record_folder_pick");
+            if (folder != null) {
+                folder.setOnPreferenceClickListener(p -> {
+                    startActivity(new Intent(requireContext(), FolderPickerActivity.class));
+                    return true;
+                });
+            }
+            Preference schedule = findPreference("schedule_open");
+            if (schedule != null) {
+                schedule.setOnPreferenceClickListener(p -> {
+                    startActivity(new Intent(requireContext(), ScheduleActivity.class));
+                    return true;
+                });
             }
 
             EditTextPreference maxGb = findPreference(Prefs.KEY_MAX_GB);
@@ -82,9 +83,35 @@ public class SettingsActivity extends AppCompatActivity {
                     }
                 };
 
+        private void updateSummaries() {
+            Preference folder = findPreference("record_folder_pick");
+            if (folder != null) {
+                File want = StorageHelper.desiredFolder(requireContext());
+                String sum = StorageHelper.volumeLabel(requireContext(), want) + "\n" + want.getAbsolutePath();
+                if (StorageHelper.isFallback(requireContext())) {
+                    sum += "\n⚠ 이 폴더에 쓸 수 없어 앱 전용 폴더에 저장 중 (권한 확인 필요)";
+                }
+                folder.setSummary(sum);
+            }
+            Preference schedule = findPreference("schedule_open");
+            if (schedule != null) {
+                Prefs p = new Prefs(requireContext());
+                if (!p.scheduleEnabled()) {
+                    schedule.setSummary("꺼짐 (항상 녹화)");
+                } else {
+                    StringBuilder sb = new StringBuilder("켜짐");
+                    for (Schedule s : p.schedules()) {
+                        if (s.enabled) sb.append("\n· ").append(s.daysText()).append("  ").append(s.timeText());
+                    }
+                    schedule.setSummary(sb.toString());
+                }
+            }
+        }
+
         @Override
         public void onResume() {
             super.onResume();
+            updateSummaries();
             getPreferenceManager().getSharedPreferences().registerOnSharedPreferenceChangeListener(changeListener);
             updateEstimate();
         }

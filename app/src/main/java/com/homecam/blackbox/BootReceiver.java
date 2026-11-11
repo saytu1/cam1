@@ -14,5 +14,6 @@ public class BootReceiver extends BroadcastReceiver {
         if (p.autoStartBoot() && p.wantRecording()) {
             RecorderService.start(context);
         }
+        Schedule.armAlarm(context);
     }
 }

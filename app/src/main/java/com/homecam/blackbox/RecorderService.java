@@ -48,6 +48,7 @@ public class RecorderService extends Service {
     public static final String ACTION_START = "com.homecam.blackbox.START";
     public static final String ACTION_STOP = "com.homecam.blackbox.STOP";
     public static final String ACTION_REFRESH = "com.homecam.blackbox.REFRESH";
+    public static final String ACTION_SCHEDULE_CHECK = "com.homecam.blackbox.SCHEDULE_CHECK";
 
     private static final int NOTIFY_ID = 1001;
     private static final long WATCHDOG_INTERVAL_MS = 30_000;
@@ -70,7 +71,8 @@ public class RecorderService extends Service {
     @Nullable private Surface previewSurface;
     private boolean previewAttached;
 
-    private boolean running;          // 사용자가 녹화를 켠 상태
+    private boolean serviceEnabled;   // 사용자가 녹화(또는 예약 녹화)를 켠 상태
+    private boolean running;          // 실제로 카메라를 열고 녹화 중인 상태
     private boolean stopping;
     @Nullable private UsbDevice device;
     private boolean cameraOpened;
@@ -105,7 +107,22 @@ public class RecorderService extends Service {
         notifyListener();
     }
 
-    public boolean isRunning() { return running; }
+    /** 녹화 기능이 켜져 있는지 (예약 대기 포함) */
+    public boolean isRunning() { return serviceEnabled; }
+
+    /** 예약 기능 상태 문구 (예약 꺼짐이면 null) */
+    @Nullable
+    public String getScheduleText() {
+        if (!prefs.scheduleEnabled()) return null;
+        List<Schedule> list = prefs.schedules();
+        long now = System.currentTimeMillis();
+        if (Schedule.isActive(list, now)) {
+            long end = Schedule.currentEnd(list, now);
+            return "예약 녹화 중" + (end > 0 ? " · 종료 " + Schedule.formatWhen(end) : "");
+        }
+        long next = Schedule.nextStart(list, now);
+        return next > 0 ? "예약 대기 · 다음 녹화 " + Schedule.formatWhen(next) : "예약된 녹화 시간이 없습니다";
+    }
 
     public boolean isRecording() { return recording; }
 
@@ -144,7 +161,17 @@ public class RecorderService extends Service {
         switch (action) {
             case ACTION_STOP:
                 prefs.setWantRecording(false);
+                Schedule.armAlarm(this);
                 stopAll();
+                break;
+            case ACTION_SCHEDULE_CHECK:
+                startForegroundCompat(statusText);
+                if (!prefs.wantRecording()) {
+                    stopAll();
+                } else {
+                    serviceEnabled = true;
+                    evaluate();
+                }
                 break;
             case ACTION_REFRESH:
                 // 앱이 전면에 있을 때 마이크 타입을 다시 붙이기 위해 호출
@@ -154,7 +181,8 @@ public class RecorderService extends Service {
             default:
                 startForegroundCompat(statusText);
                 prefs.setWantRecording(true);
-                startAll();
+                serviceEnabled = true;
+                evaluate();
                 break;
         }
         return START_STICKY;
@@ -173,6 +201,61 @@ public class RecorderService extends Service {
         super.onDestroy();
     }
 
+    // ---------------------------------------------------------------- 예약 판정
+
+    /** 예약 설정에 따라 녹화를 시작하거나 멈춤 */
+    private void evaluate() {
+        if (!serviceEnabled) return;
+        boolean want = prefs.shouldRecordNow();
+        if (want && !running) {
+            if (!stopping) startAll();
+            else handler.postDelayed(this::evaluate, 1_000); // 정지 마무리 후 재판정
+        } else if (!want && running) {
+            stopCapture();
+        } else if (!want) {
+            setStatus(idleText());
+        }
+        Schedule.armAlarm(this);
+        handler.removeCallbacks(scheduleTick);
+        if (prefs.scheduleEnabled()) handler.postDelayed(scheduleTick, 30_000);
+    }
+
+    /** 알람이 늦거나 누락돼도 30초마다 예약 상태 확인 (서비스가 살아있는 동안) */
+    private final Runnable scheduleTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!serviceEnabled || !prefs.scheduleEnabled()) return;
+            if (prefs.shouldRecordNow() != running && !stopping) {
+                evaluate();
+                return;
+            }
+            if (!running) setStatus(idleText());
+            handler.postDelayed(this, 30_000);
+        }
+    };
+
+    private String idleText() {
+        String t = getScheduleText();
+        return t != null ? t : "대기 중";
+    }
+
+    /** 예약 시간이 끝나 카메라를 닫고 대기 상태로 (서비스는 유지) */
+    private void stopCapture() {
+        Log.i(TAG, "schedule window ended -> stop capture");
+        running = false;
+        stopping = true;
+        handler.removeCallbacks(findDeviceRunnable);
+        handler.removeCallbacks(watchdog);
+        setStatus("예약 시간 종료 - 녹화 마무리 중");
+        stopRecorder(() -> {
+            releaseCamera();
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+            stopping = false;
+            setStatus(idleText());
+            if (serviceEnabled && prefs.shouldRecordNow()) evaluate();
+        });
+    }
+
     // ---------------------------------------------------------------- 시작 / 종료
 
     private void startAll() {
@@ -185,8 +268,8 @@ public class RecorderService extends Service {
         consecutiveErrors = 0;
         if (!wakeLock.isHeld()) wakeLock.acquire();
         recordDir = StorageHelper.recordDir(this);
-        if ("sd".equals(prefs.storageLocation()) && !StorageHelper.isUsingSd(this)) {
-            Log.w(TAG, "SD card not available, falling back to internal");
+        if (StorageHelper.isFallback(this)) {
+            Log.w(TAG, "desired folder not writable, using app folder: " + recordDir);
         }
         if (camera == null) {
             camera = new CameraHelper();
@@ -198,6 +281,7 @@ public class RecorderService extends Service {
     }
 
     private void stopAll() {
+        serviceEnabled = false;
         running = false;
         stopping = true;
         handler.removeCallbacksAndMessages(null);
@@ -492,6 +576,7 @@ public class RecorderService extends Service {
             @Override
             public void onSegmentFinished(File file) {
                 Log.i(TAG, "saved " + file.getName() + " " + file.length());
+                StorageHelper.scan(RecorderService.this, file);
                 handler.post(RecorderService.this::notifyListener);
             }
 

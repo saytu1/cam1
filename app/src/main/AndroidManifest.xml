@@ -17,14 +17,25 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- 앱 전용 폴더(내장/SD)만 사용하므로 라이브러리의 광범위 저장소 권한은 제거 -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <!-- 사용자가 고른 저장 폴더(내장/SD)에 직접 저장 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"
+        tools:node="replace" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"
+        tools:node="replace" />
+
+    <!-- 예약 녹화 시작/종료 시각에 정확히 깨우기 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
         android:name=".App"
         android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -57,6 +68,18 @@
             android:name=".RecordingsActivity"
             android:exported="false"
             android:label="@string/recordings" />
+
+        <activity
+            android:name=".FolderPickerActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ScheduleActivity"
+            android:exported="false" />
+
+        <receiver
+            android:name=".ScheduleReceiver"
+            android:exported="false" />
 
         <service
             android:name=".RecorderService"
